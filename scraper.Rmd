@@ -1,0 +1,123 @@
+---
+title: "scraper"
+author: "Sergio Olmos Pardo"
+date: "7/3/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(httr)
+library(jsonlite)
+library(magrittr)
+
+pbp <- GET("http://live.euroleague.net/api/PlayByPlay?gamecode=175&seasoncode=E2017&disp=") %>% 
+        stop_for_status()
+
+# OR
+
+pbp2 <- GET("http://live.euroleague.net/api/PlayByPlay", query=list(gamecode=175, seasoncode="E2017"))
+```
+
+```{r}
+names(pbp)
+```
+
+Parse with jsonlite:
+```{r}
+text_content <- content(pbp, as="text", encoding="UTF-8")
+json_content <- text_content %>% fromJSON
+json_content$FirstQuarter
+```
+
+```{r}
+first_q <- json_content$FirstQuarter
+str(first_q)
+```
+
+We combine all quarters:
+```{r}
+pbp_df <- with(json_content, rbind(FirstQuarter, SecondQuarter,
+                                   ThirdQuarter, ForthQuarter,
+                                   ExtraTime))
+pbp_df
+```
+
+And add the variable quarters:
+```{r}
+rows_per_q <- c(nrow(json_content$FirstQuarter),
+                nrow(json_content$SecondQuarter),
+                nrow(json_content$ThirdQuarter),
+                nrow(json_content$ForthQuarter),
+                ifelse(is.null(nrow(json_content$ExtraTime)), 0,
+                       nrow(json_content$ExtraTime)))
+
+# How to deal with multiple overtimes?
+if (is.null(nrow(json_content$ExtraTime))) {
+        quarters <- rep(1:4, rows_per_q[-5])
+} else{
+        quarters <- rep(1:5, rows_per_q)
+}
+
+# Transform MARKERTIME into a period object
+library(dplyr)
+pbp_df$QUARTER <- quarters
+pbp_df[which(pbp_df$PLAYTYPE=="BP"), "MARKERTIME"] <- "10:00"
+pbp_df[which(pbp_df$PLAYTYPE=="EP"), "MARKERTIME"] <- "00:00"
+pbp_df[which(pbp_df$PLAYTYPE=="EG"), "MARKERTIME"] <- "00:00"
+pbp_df <- pbp_df %>% 
+        mutate(TIME = ms(MARKERTIME))
+
+# A more appropriate form of MARKERTIME
+## What to do with overtimes?
+time <- as.duration(pbp_df$TIME) - as.duration(ms("10:00"))
+add_time <- rep(c("00:00", "10:00", "20:00", "30:00"), rows_per_q[-5])
+add_time <- ms(add_time)
+time_elapsed <- time - as.duration(add_time)
+```
+
+Queremos averiguar los quintetos titulares de los dos equipos. Una aproximación podría ser los 5 primeros jugadores que salen del campo por cada equipo. Esto no sería adecuado si el jugador que cambia por uno de los jugadores del quinteto inicial vuelve a sentarse en el banquillo antes de que se siente uno del quinteto inicial. 
+
+Vemos que los jugadores titulares están en negrita en el boxscore. Podemos utilizar el paquete `rvest` para obtener los nombres.
+```{r starting lineups}
+library(dplyr)
+q1 <- mutate(first_q,
+                CODETEAM = trimws(CODETEAM),
+                PLAYER_ID = trimws(PLAYER_ID)
+                )
+str(q1)
+library(rvest)
+URL <- "http://www.euroleague.net/main/results/showgame?gamecode=152&seasoncode=E2017#!boxscore"
+boxscore <- read_html(URL)
+starting_fives <- boxscore %>% 
+        html_nodes(".PlayerStartFive") %>% 
+        html_text()
+starting_fives
+starting_home <- pbp_df %>% 
+        filter(PLAYTYPE=="OUT" & CODETEAM==json_content$CodeTeamA)
+        
+starting_home[1:5,]
+starting_away <- first_q %>% 
+        filter(PLAYTYPE=="OUT" & CODETEAM==json_content$CodeTeamB)
+starting_away
+
+subs_home <- pbp_df %>% 
+        filter(PLAYTYPE=="IN" & CODETEAM==json_content$CodeTeamA)
+subs_home
+```
+
+
+
+```{r}
+score_df <- filter(pbp_df, !is.na(POINTS_A) | !is.na(POINTS_B))
+score_df <- 
+```
+
+```{r}
+library(ggplot2)
+ggplot(score_df[-(1:2),], aes())
+```
+
